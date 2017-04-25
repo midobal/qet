@@ -5,7 +5,7 @@ __author__ = "Miguel Domingo"
 __license__ = "MIT License"
 __email__ = "midobal@prhlt.upv.es"
 
-import sys, os
+import sys, os, subprocess
 
 def commonWords(hyp, pe):
     """
@@ -40,6 +40,33 @@ def commonWords(hyp, pe):
                 
     return [int(index) for index in list(reversed(LCS_xpath[0][0].split()))]
 
+def phraseLevelTagGeneration(hyp, pe, phrases):
+    """
+    This function generates phrase-level QE tags for a given translation hypothesis.
+    The function prints the tags into the standard output.
+    """
+    tags = ['BAD' for word in range(len(hyp.split()))]
+    correct_words = commonWords(hyp, pe)
+
+    #Store word-level tags.
+    for word in correct_words:
+        tags[int(word)] = 'OK'
+
+    #Compute phrase-level.
+    for phrase in phrases.split('|'):
+        tag = 'OK'
+
+        #A phrase is tagged as 'BAD' if it contains 'BAD' words.
+        for word in phrase.split():
+            if tags[int(word) - 1] == 'BAD':
+                tag = 'BAD'
+
+        #Assign the tag to all the words in the phrase.
+        for word in phrase.split():
+            tags[int(word) - 1] = tag
+
+    print ' '.join(tags)
+
 def wordLevelTagGeneration(hyp, pe):
     """
     This function generates word-level QE tags for a given translation hypothesis.
@@ -72,14 +99,24 @@ def wordLevelTagGeneration(hyp, pe):
 
         print tags.strip()
 
+def obtainPhrases(src, hyp, mgiza):
+    """
+    This function segments the translation hypothesis in phrases. The function returns
+    the path to a file containing the phrase segmentation.
+    """
+    pa = os.path.dirname(sys.argv[0]) + '/phrase_alignments.sh'
+    subprocess.call(pa + ' ' + src + ' ' +  hyp + ' ' +  mgiza, shell=True)
+    
+    return '/tmp/qet/phrases'
+
 def usage():
     """                                                                                                                                                                                                           
     This function shows the usage message.                                                                                                                                                                        
     """
     sys.stderr.write('Usage: ' + sys.argv[0] + ' -t translation_file -pe post-edited_file [options]\n\n')
     sys.stderr.write('Options: \n')
-    sys.stderr.write('  -h     show this message.\n')
-    sys.stderr.write('  -p     generate phrase-level QE tags (default: word-level).\n')
+    sys.stderr.write('  -h                         show this message.\n')
+    sys.stderr.write('  -p source_file mgiza_path  generate phrase-level QE tags (default: word-level).\n')
     sys.exit(-1)
 
 def getArguments():
@@ -89,22 +126,35 @@ def getArguments():
     hyp = None
     pe = None
     phrase_level = False
+    src = None
+    mgiza = None
     
     #Loop through the arguments.
     n = 1
     while n < len(sys.argv):
 
         if sys.argv[n] == '-t':
-            hyp = sys.argv[n + 1]
+            try:
+                hyp = sys.argv[n + 1]
+            except:
+                usage()
             n += 2
 
         elif sys.argv[n] == '-pe':
-            pe = sys.argv[n + 1]
+            try:
+                pe = sys.argv[n + 1]
+            except:
+                usage()
             n += 2
             
         elif sys.argv[n] == '-p':
             phrase_level = True
-            n += 1
+            try:
+                src = sys.argv[n + 1]
+                mgiza = sys.argv[n + 2]
+            except:
+                usage()
+            n += 3
             
         else:
             usage()
@@ -122,13 +172,21 @@ def getArguments():
         sys.stderr.write('Error opening file ' + pe + '.\n')
         sys.exit(-1)
 
+    if phrase_level and not os.path.isfile(src):
+        sys.stderr.write('Error opening file ' + src + '.\n')
+        sys.exit(-1)
+
+    if phrase_level and not os.path.isdir(mgiza):
+        sys.stderr.write('Path ' + mgiza + ' does not exist.\n')
+        sys.exit(-1)
+
     #Return arguments.
-    return hyp, pe, phrase_level
+    return hyp, pe, phrase_level, src, mgiza
 
 if __name__ == "__main__":
 
     #Check arguments.
-    hyp, pe, phrase_level = getArguments()
+    hyp, pe, phrase_level, src, mgiza = getArguments()
 
     #Check file lengths.
     hyp_sentences = sum(1 for line in open(hyp))
@@ -137,10 +195,18 @@ if __name__ == "__main__":
         sys.stderr.write('Files differ in number of sentences!\n')
         sys.exit(-1)
 
+    #Obtain phrases.
+    if phrase_level:
+        phrases = obtainPhrases(src, hyp, mgiza)
+
     #Loop the text sentence by sentence.
     pe_file = open(pe, 'r')
+    if phrase_level:
+        phrases_file = open(phrases, 'r')
     for hyp_sentence in open(hyp):
         pe_sentence = pe_file.readline()
+        if phrase_level:
+            phrase_sentence = phrases_file.readline()
 
         #Generate word-level tags.
         if not phrase_level:
@@ -148,5 +214,8 @@ if __name__ == "__main__":
 
         #Generate phrase-level tags.
         else:
-            sys.stderr.write('Phrase-level tagger is under development.\n')
-            sys.exit(-1)
+            phraseLevelTagGeneration(hyp_sentence, pe_sentence, phrase_sentence)
+
+    #Remove phrases' temporal files
+    if phrase_level:
+        subprocess.call('rm -r /tmp/qet', shell=True)
